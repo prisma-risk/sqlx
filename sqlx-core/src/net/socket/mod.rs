@@ -11,6 +11,9 @@ use cfg_if::cfg_if;
 use crate::io::ReadBuf;
 
 mod buffered;
+mod tcp;
+
+pub use tcp::{TcpKeepalive, TcpOptions};
 
 pub trait Socket: Send + Sync + Unpin + 'static {
     fn try_read(&mut self, buf: &mut dyn ReadBuf) -> io::Result<usize>;
@@ -186,18 +189,31 @@ pub async fn connect_tcp<Ws: WithSocket>(
     port: u16,
     with_socket: Ws,
 ) -> crate::Result<Ws::Output> {
+    connect_tcp_with(host, port, &TcpOptions::default(), with_socket).await
+}
+
+/// Connect a TCP socket to `host` and `port` and apply `options` to it before `with_socket` sees
+/// it.
+pub async fn connect_tcp_with<Ws: WithSocket>(
+    host: &str,
+    port: u16,
+    options: &TcpOptions,
+    with_socket: Ws,
+) -> crate::Result<Ws::Output> {
     #[cfg(feature = "_rt-tokio")]
     if crate::rt::rt_tokio::available() {
-        return Ok(with_socket
-            .with_socket(tokio::net::TcpStream::connect((host, port)).await?)
-            .await);
+        let stream = tokio::net::TcpStream::connect((host, port)).await?;
+        options.apply(socket2::SockRef::from(&stream))?;
+        return Ok(with_socket.with_socket(stream).await);
     }
 
     cfg_if! {
         if #[cfg(feature = "_rt-async-io")] {
-            Ok(with_socket.with_socket(connect_tcp_async_io(host, port).await?).await)
+            let stream = connect_tcp_async_io(host, port).await?;
+            options.apply(socket2::SockRef::from(stream.get_ref()))?;
+            Ok(with_socket.with_socket(stream).await)
         } else {
-            crate::rt::missing_rt((host, port, with_socket))
+            crate::rt::missing_rt((host, port, options, with_socket))
         }
     }
 }
@@ -208,7 +224,10 @@ pub async fn connect_tcp<Ws: WithSocket>(
 ///
 /// This implements the same behavior as [`tokio::net::TcpStream::connect()`].
 #[cfg(feature = "_rt-async-io")]
-async fn connect_tcp_async_io(host: &str, port: u16) -> crate::Result<impl Socket> {
+async fn connect_tcp_async_io(
+    host: &str,
+    port: u16,
+) -> crate::Result<async_io::Async<std::net::TcpStream>> {
     use async_io::Async;
     use std::net::{IpAddr, TcpStream, ToSocketAddrs};
 

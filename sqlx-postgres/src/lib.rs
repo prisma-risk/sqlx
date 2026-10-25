@@ -59,6 +59,7 @@ pub use message::PgSeverity;
 pub use options::{PgConnectOptions, PgSslMode};
 pub use query_result::PgQueryResult;
 pub use row::PgRow;
+pub use sqlx_core::net::TcpKeepalive;
 pub use statement::PgStatement;
 pub use transaction::PgTransactionManager;
 pub use type_info::{PgTypeInfo, PgTypeKind};
