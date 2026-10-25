@@ -49,7 +49,9 @@ impl PgStream {
                     &options.host,
                     options.port,
                     MaybeUpgradeTls(options),
-                    &net::TcpConnectOptions::new().with_user_timeout(options.tcp_user_timeout),
+                    &net::TcpConnectOptions::new()
+                        .with_keepalive(options.tcp_keepalive)
+                        .with_user_timeout(options.tcp_user_timeout),
                 )
                 .await?
             }

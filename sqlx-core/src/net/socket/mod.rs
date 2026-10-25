@@ -8,10 +8,12 @@ use std::time::Duration;
 pub use buffered::{BufferedSocket, WriteBuffer};
 use bytes::BufMut;
 use cfg_if::cfg_if;
+pub use tcp_keepalive::TcpKeepalive;
 
 use crate::io::ReadBuf;
 
 mod buffered;
+mod tcp_keepalive;
 
 pub trait Socket: Send + Sync + Unpin + 'static {
     fn try_read(&mut self, buf: &mut dyn ReadBuf) -> io::Result<usize>;
@@ -188,6 +190,8 @@ impl<S: Socket + ?Sized> Socket for Box<S> {
 #[derive(Debug, Clone, Copy, Default)]
 #[non_exhaustive]
 pub struct TcpConnectOptions {
+    /// TCP keepalive parameters, or `None` to leave keepalive off.
+    pub keepalive: Option<TcpKeepalive>,
     /// `TCP_USER_TIMEOUT`, or `None` to keep the operating system default.
     pub user_timeout: Option<Duration>,
 }
@@ -198,9 +202,16 @@ impl TcpConnectOptions {
         Self::default()
     }
 
-    /// Sets `TCP_USER_TIMEOUT`: the kernel drops the connection once sent data has gone
-    /// unacknowledged for `timeout`. `None` or a zero duration keeps the operating system
-    /// default. The kernel counts whole milliseconds, so a shorter non-zero `timeout` becomes one.
+    /// Enables TCP keepalive with the given parameters, or disables it if passed `None`.
+    pub fn with_keepalive(mut self, keepalive: impl Into<Option<TcpKeepalive>>) -> Self {
+        self.keepalive = keepalive.into();
+        self
+    }
+
+    /// Sets `TCP_USER_TIMEOUT`: the kernel drops the connection once sent data, keepalive probes
+    /// included, has gone unacknowledged for `timeout`. `None` or a zero duration keeps the
+    /// operating system default. The kernel counts whole milliseconds, so a shorter non-zero
+    /// `timeout` becomes one.
     ///
     /// Only Linux, Android, Fuchsia and Cygwin have the option; elsewhere it is ignored.
     pub fn with_user_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
@@ -218,6 +229,12 @@ pub async fn connect_tcp<Ws: WithSocket>(
 }
 
 /// Open a TCP socket to `host` and `port`, applying `options` to it.
+///
+/// A connection whose server disappeared without closing the socket (a failover, a killed
+/// container, a dropped NAT mapping) otherwise looks open until the operating system gives up on
+/// it: never, while the client waits for a response, and after about 15 minutes of retransmission
+/// on Linux, while it has data unacknowledged. Keepalive bounds the first case and
+/// `TCP_USER_TIMEOUT` the second.
 pub async fn connect_tcp_with<Ws: WithSocket>(
     host: &str,
     port: u16,
@@ -228,7 +245,7 @@ pub async fn connect_tcp_with<Ws: WithSocket>(
     if crate::rt::rt_tokio::available() {
         let socket = tokio::net::TcpStream::connect((host, port)).await?;
         socket.set_nodelay(true)?;
-        set_tcp_user_timeout(&socket, options.user_timeout)?;
+        apply_tcp_options(&socket, options)?;
         return Ok(with_socket.with_socket(socket).await);
     }
 
@@ -242,54 +259,59 @@ pub async fn connect_tcp_with<Ws: WithSocket>(
     }
 }
 
-/// Without `TCP_USER_TIMEOUT`, Linux retransmits unacknowledged data for about 15 minutes
-/// (`tcp_retries2`) before it fails a connection whose server stopped answering without a FIN or
-/// RST.
 #[cfg(all(
-    any(
+    any(unix, windows),
+    any(feature = "_rt-tokio", feature = "_rt-async-io")
+))]
+fn apply_tcp_options<'a>(
+    stream: impl Into<socket2::SockRef<'a>>,
+    options: &TcpConnectOptions,
+) -> crate::Result<()> {
+    let socket = stream.into();
+
+    if let Some(keepalive) = options.keepalive {
+        socket
+            .set_tcp_keepalive(&keepalive.to_socket2())
+            .map_err(|err| {
+                crate::Error::Configuration(
+                    format!("failed to apply TCP keepalive settings {keepalive:?}: {err}").into(),
+                )
+            })?;
+    }
+
+    // Only these targets have `TCP_USER_TIMEOUT`; elsewhere the option is ignored rather than
+    // failing the connection.
+    #[cfg(any(
         target_os = "android",
         target_os = "fuchsia",
         target_os = "linux",
         target_os = "cygwin"
-    ),
-    any(feature = "_rt-tokio", feature = "_rt-async-io")
-))]
-fn set_tcp_user_timeout<'a>(
-    stream: impl Into<socket2::SockRef<'a>>,
-    timeout: Option<Duration>,
-) -> crate::Result<()> {
-    let Some(timeout) = timeout else {
-        return Ok(());
-    };
-    // socket2 truncates to whole milliseconds, and zero means the system default.
-    let timeout = if timeout.is_zero() {
-        timeout
-    } else {
-        std::cmp::max(timeout, Duration::from_millis(1))
-    };
+    ))]
+    if let Some(timeout) = options.user_timeout {
+        // socket2 truncates to whole milliseconds, and zero means the system default.
+        let timeout = if timeout.is_zero() {
+            timeout
+        } else {
+            std::cmp::max(timeout, Duration::from_millis(1))
+        };
 
-    stream
-        .into()
-        .set_tcp_user_timeout(Some(timeout))
-        .map_err(|err| {
+        socket.set_tcp_user_timeout(Some(timeout)).map_err(|err| {
             crate::Error::Configuration(
                 format!("failed to set TCP_USER_TIMEOUT to {timeout:?}: {err}").into(),
             )
-        })
+        })?;
+    }
+
+    Ok(())
 }
 
-/// This target has no `TCP_USER_TIMEOUT`, so the option is ignored rather than failing the
-/// connection.
+/// Applying socket options needs `setsockopt()`, which this target does not have, so they are
+/// ignored rather than failing the connection.
 #[cfg(all(
-    not(any(
-        target_os = "android",
-        target_os = "fuchsia",
-        target_os = "linux",
-        target_os = "cygwin"
-    )),
+    not(any(unix, windows)),
     any(feature = "_rt-tokio", feature = "_rt-async-io")
 ))]
-fn set_tcp_user_timeout<S>(_stream: &S, _timeout: Option<Duration>) -> crate::Result<()> {
+fn apply_tcp_options<S>(_stream: &S, _options: &TcpConnectOptions) -> crate::Result<()> {
     Ok(())
 }
 
@@ -314,7 +336,7 @@ async fn connect_tcp_async_io(
     if let Ok(addr) = host.parse::<IpAddr>() {
         let socket = Async::<TcpStream>::connect((addr, port)).await?;
         socket.get_ref().set_nodelay(true)?;
-        set_tcp_user_timeout(socket.get_ref(), options.user_timeout)?;
+        apply_tcp_options(socket.get_ref(), options)?;
         return Ok(socket);
     }
 
@@ -333,7 +355,7 @@ async fn connect_tcp_async_io(
         match Async::<TcpStream>::connect(socket_addr).await {
             Ok(stream) => {
                 stream.get_ref().set_nodelay(true)?;
-                set_tcp_user_timeout(stream.get_ref(), options.user_timeout)?;
+                apply_tcp_options(stream.get_ref(), options)?;
                 return Ok(stream);
             }
             Err(e) => last_err = Some(e),
@@ -398,30 +420,141 @@ pub async fn connect_uds<P: AsRef<Path>, Ws: WithSocket>(
 
 #[cfg(all(
     test,
-    target_os = "linux",
+    any(unix, windows),
     any(feature = "_rt-tokio", feature = "_rt-async-io")
 ))]
 mod tests {
     use super::*;
+    use socket2::SockRef;
     use std::net::{TcpListener, TcpStream};
 
-    #[test]
-    fn user_timeout_reaches_the_socket_and_none_leaves_the_default() {
+    fn loopback() -> (TcpListener, TcpStream) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        let socket = socket2::SockRef::from(&stream);
-        let default = socket.tcp_user_timeout().unwrap();
 
-        set_tcp_user_timeout(&stream, None).unwrap();
-        assert_eq!(socket.tcp_user_timeout().unwrap(), default);
+        (listener, stream)
+    }
 
-        set_tcp_user_timeout(&stream, Some(Duration::from_secs(60))).unwrap();
+    #[test]
+    fn default_options_leave_the_socket_alone() {
+        let (_listener, stream) = loopback();
+        let socket = SockRef::from(&stream);
+        #[cfg(target_os = "linux")]
+        let user_timeout = socket.tcp_user_timeout().unwrap();
+
+        apply_tcp_options(&stream, &TcpConnectOptions::new()).unwrap();
+
+        assert!(!socket.keepalive().unwrap());
+        #[cfg(target_os = "linux")]
+        assert_eq!(socket.tcp_user_timeout().unwrap(), user_timeout);
+    }
+
+    #[test]
+    fn keepalive_parameters_reach_the_socket() {
+        let (_listener, stream) = loopback();
+        let keepalive = TcpKeepalive::new()
+            .with_idle(Duration::from_secs(30))
+            .with_interval(Duration::from_secs(10))
+            .with_retries(3);
+
+        apply_tcp_options(&stream, &TcpConnectOptions::new().with_keepalive(keepalive)).unwrap();
+
+        let socket = SockRef::from(&stream);
+        assert!(socket.keepalive().unwrap());
+
+        // `socket2` only has getters for the individual parameters on some platforms; these
+        // cover CI and local development.
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+        {
+            assert_eq!(
+                socket.tcp_keepalive_time().unwrap(),
+                Duration::from_secs(30)
+            );
+            assert_eq!(
+                socket.tcp_keepalive_interval().unwrap(),
+                Duration::from_secs(10)
+            );
+            assert_eq!(socket.tcp_keepalive_retries().unwrap(), 3);
+        }
+    }
+
+    /// Linux rejects a literal 0 for any of the three options with `EINVAL`, and `socket2`
+    /// truncates durations to whole seconds, so zero and sub-second values must never reach
+    /// `setsockopt` as 0.
+    ///
+    /// Assigned to the fields directly rather than through the builders: the fields are public,
+    /// so normalizing in the builders alone would not be enough.
+    #[test]
+    fn zero_and_sub_second_keepalive_values_are_not_passed_through() {
+        let (_listener, stream) = loopback();
+
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+        let system_defaults = {
+            let socket = SockRef::from(&stream);
+
+            (
+                socket.tcp_keepalive_time().unwrap(),
+                socket.tcp_keepalive_retries().unwrap(),
+            )
+        };
+
+        let mut keepalive = TcpKeepalive::new();
+        keepalive.idle = Some(Duration::ZERO);
+        keepalive.interval = Some(Duration::from_millis(500));
+        keepalive.retries = Some(0);
+
+        apply_tcp_options(&stream, &TcpConnectOptions::new().with_keepalive(keepalive)).unwrap();
+
+        let socket = SockRef::from(&stream);
+        assert!(socket.keepalive().unwrap());
+
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+        {
+            assert_eq!(
+                (
+                    socket.tcp_keepalive_time().unwrap(),
+                    socket.tcp_keepalive_retries().unwrap(),
+                ),
+                system_defaults,
+            );
+            assert_eq!(
+                socket.tcp_keepalive_interval().unwrap(),
+                Duration::from_secs(1)
+            );
+        }
+    }
+
+    /// A value the kernel rejects fails with an error that says what was being set.
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+    #[test]
+    fn rejected_keepalive_values_name_keepalive_in_the_error() {
+        let (_listener, stream) = loopback();
+
+        // Becomes -1 once cast to the `c_int` the option takes.
+        let keepalive = TcpKeepalive::new().with_retries(u32::MAX);
+
+        let err = apply_tcp_options(&stream, &TcpConnectOptions::new().with_keepalive(keepalive))
+            .unwrap_err();
+
+        assert!(matches!(err, crate::Error::Configuration(_)), "{err:?}");
+        assert!(err.to_string().contains("TCP keepalive"), "{err}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn user_timeout_reaches_the_socket() {
+        let (_listener, stream) = loopback();
+        let socket = SockRef::from(&stream);
+
+        let options = TcpConnectOptions::new().with_user_timeout(Duration::from_secs(60));
+        apply_tcp_options(&stream, &options).unwrap();
         assert_eq!(
             socket.tcp_user_timeout().unwrap(),
             Some(Duration::from_secs(60))
         );
 
-        set_tcp_user_timeout(&stream, Some(Duration::from_micros(500))).unwrap();
+        let options = TcpConnectOptions::new().with_user_timeout(Duration::from_micros(500));
+        apply_tcp_options(&stream, &options).unwrap();
         assert_eq!(
             socket.tcp_user_timeout().unwrap(),
             Some(Duration::from_millis(1)),
@@ -431,30 +564,38 @@ mod tests {
 
     #[cfg(feature = "_rt-tokio")]
     #[test]
-    fn connect_tcp_with_applies_the_user_timeout() {
-        struct UserTimeout;
+    fn connect_tcp_with_applies_the_options() {
+        struct AssertApplied;
 
-        impl WithSocket for UserTimeout {
-            type Output = Option<Duration>;
+        impl WithSocket for AssertApplied {
+            type Output = ();
 
             async fn with_socket<S: Socket>(self, socket: S) -> Self::Output {
                 let stream = (&socket as &dyn std::any::Any)
                     .downcast_ref::<tokio::net::TcpStream>()
                     .expect("the tokio path hands over a tokio TcpStream");
-                socket2::SockRef::from(stream).tcp_user_timeout().unwrap()
+                let socket = SockRef::from(stream);
+
+                assert!(socket.keepalive().unwrap());
+                #[cfg(target_os = "linux")]
+                assert_eq!(
+                    socket.tcp_user_timeout().unwrap(),
+                    Some(Duration::from_secs(45))
+                );
             }
         }
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let options = TcpConnectOptions::new().with_user_timeout(Duration::from_secs(45));
+        let options = TcpConnectOptions::new()
+            .with_keepalive(TcpKeepalive::new().with_idle(Duration::from_secs(30)))
+            .with_user_timeout(Duration::from_secs(45));
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
-        let applied = runtime
-            .block_on(connect_tcp_with("127.0.0.1", port, UserTimeout, &options))
+        runtime
+            .block_on(connect_tcp_with("127.0.0.1", port, AssertApplied, &options))
             .unwrap();
-        assert_eq!(applied, Some(Duration::from_secs(45)));
     }
 }

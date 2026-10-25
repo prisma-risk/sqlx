@@ -105,15 +105,16 @@ hashbrown = "0.16.0"
 
 thiserror.workspace = true
 
-# Only used to set `TCP_USER_TIMEOUT`, so it is pulled in by the runtime features and only on the
-# targets that have the option. `tokio` 1.47 and later already depend on socket2 0.6 through their
-# `net` feature, so with a current `tokio` this adds no crate to the graph.
-[target.'cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux", target_os = "cygwin"))'.dependencies]
+# Only used to apply TCP keepalive and `TCP_USER_TIMEOUT` to a connection's socket, so it is
+# pulled in by the runtime features and only for targets that have `setsockopt`. `tokio` 1.47 and
+# later already depend on socket2 0.6 through their `net` feature, so with a current `tokio` this
+# adds no crate to the graph.
+[target.'cfg(any(unix, windows))'.dependencies]
 socket2 = { version = "0.6", features = ["all"], optional = true }
 
 [dev-dependencies]
 tempfile = "3.10.1"
-tokio = { version = "1.25.0", features = ["rt"] }
+tokio = { version = "1.27.0", features = ["rt"] }
 
 [dev-dependencies.sqlx]
 # FIXME: https://github.com/rust-lang/cargo/issues/15622
