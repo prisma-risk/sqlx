@@ -3,6 +3,7 @@ use std::io;
 use std::path::Path;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
+use std::time::Duration;
 
 pub use buffered::{BufferedSocket, WriteBuffer};
 use bytes::BufMut;
@@ -181,34 +182,129 @@ impl<S: Socket + ?Sized> Socket for Box<S> {
     }
 }
 
+/// Options applied to a TCP socket as it is opened.
+///
+/// `TCP_NODELAY` is not represented here: it is always set.
+#[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
+pub struct TcpConnectOptions {
+    /// `TCP_USER_TIMEOUT`, or `None` to keep the operating system default.
+    pub user_timeout: Option<Duration>,
+}
+
+impl TcpConnectOptions {
+    /// Options that change nothing about the socket beyond the defaults SQLx always applies.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets `TCP_USER_TIMEOUT`: the kernel drops the connection once sent data has gone
+    /// unacknowledged for `timeout`. `None` or a zero duration keeps the operating system
+    /// default. The kernel counts whole milliseconds, so a shorter non-zero `timeout` becomes one.
+    ///
+    /// Only Linux, Android, Fuchsia and Cygwin have the option; elsewhere it is ignored.
+    pub fn with_user_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
+        self.user_timeout = timeout.into();
+        self
+    }
+}
+
 pub async fn connect_tcp<Ws: WithSocket>(
     host: &str,
     port: u16,
     with_socket: Ws,
 ) -> crate::Result<Ws::Output> {
+    connect_tcp_with(host, port, with_socket, &TcpConnectOptions::new()).await
+}
+
+/// Open a TCP socket to `host` and `port`, applying `options` to it.
+pub async fn connect_tcp_with<Ws: WithSocket>(
+    host: &str,
+    port: u16,
+    with_socket: Ws,
+    options: &TcpConnectOptions,
+) -> crate::Result<Ws::Output> {
     #[cfg(feature = "_rt-tokio")]
     if crate::rt::rt_tokio::available() {
         let socket = tokio::net::TcpStream::connect((host, port)).await?;
         socket.set_nodelay(true)?;
+        set_tcp_user_timeout(&socket, options.user_timeout)?;
         return Ok(with_socket.with_socket(socket).await);
     }
 
     cfg_if! {
         if #[cfg(feature = "_rt-async-io")] {
-            Ok(with_socket.with_socket(connect_tcp_async_io(host, port).await?).await)
+            // Options are applied inside, on the concrete socket type.
+            Ok(with_socket.with_socket(connect_tcp_async_io(host, port, options).await?).await)
         } else {
-            crate::rt::missing_rt((host, port, with_socket))
+            crate::rt::missing_rt((host, port, with_socket, options))
         }
     }
+}
+
+/// Without `TCP_USER_TIMEOUT`, Linux retransmits unacknowledged data for about 15 minutes
+/// (`tcp_retries2`) before it fails a connection whose server stopped answering without a FIN or
+/// RST.
+#[cfg(all(
+    any(
+        target_os = "android",
+        target_os = "fuchsia",
+        target_os = "linux",
+        target_os = "cygwin"
+    ),
+    any(feature = "_rt-tokio", feature = "_rt-async-io")
+))]
+fn set_tcp_user_timeout<'a>(
+    stream: impl Into<socket2::SockRef<'a>>,
+    timeout: Option<Duration>,
+) -> crate::Result<()> {
+    let Some(timeout) = timeout else {
+        return Ok(());
+    };
+    // socket2 truncates to whole milliseconds, and zero means the system default.
+    let timeout = if timeout.is_zero() {
+        timeout
+    } else {
+        std::cmp::max(timeout, Duration::from_millis(1))
+    };
+
+    stream
+        .into()
+        .set_tcp_user_timeout(Some(timeout))
+        .map_err(|err| {
+            crate::Error::Configuration(
+                format!("failed to set TCP_USER_TIMEOUT to {timeout:?}: {err}").into(),
+            )
+        })
+}
+
+/// This target has no `TCP_USER_TIMEOUT`, so the option is ignored rather than failing the
+/// connection.
+#[cfg(all(
+    not(any(
+        target_os = "android",
+        target_os = "fuchsia",
+        target_os = "linux",
+        target_os = "cygwin"
+    )),
+    any(feature = "_rt-tokio", feature = "_rt-async-io")
+))]
+fn set_tcp_user_timeout<S>(_stream: &S, _timeout: Option<Duration>) -> crate::Result<()> {
+    Ok(())
 }
 
 /// Open a TCP socket to `host` and `port`.
 ///
 /// If `host` is a hostname, attempt to connect to each address it resolves to.
 ///
-/// This implements the same behavior as [`tokio::net::TcpStream::connect()`] and additionally sets the `TCP_NODELAY` flag.
+/// This implements the same behavior as [`tokio::net::TcpStream::connect()`], additionally sets
+/// the `TCP_NODELAY` flag, and applies `options`.
 #[cfg(feature = "_rt-async-io")]
-async fn connect_tcp_async_io(host: &str, port: u16) -> crate::Result<impl Socket> {
+async fn connect_tcp_async_io(
+    host: &str,
+    port: u16,
+    options: &TcpConnectOptions,
+) -> crate::Result<impl Socket> {
     use async_io::Async;
     use std::net::{IpAddr, TcpStream, ToSocketAddrs};
 
@@ -218,6 +314,7 @@ async fn connect_tcp_async_io(host: &str, port: u16) -> crate::Result<impl Socke
     if let Ok(addr) = host.parse::<IpAddr>() {
         let socket = Async::<TcpStream>::connect((addr, port)).await?;
         socket.get_ref().set_nodelay(true)?;
+        set_tcp_user_timeout(socket.get_ref(), options.user_timeout)?;
         return Ok(socket);
     }
 
@@ -236,6 +333,7 @@ async fn connect_tcp_async_io(host: &str, port: u16) -> crate::Result<impl Socke
         match Async::<TcpStream>::connect(socket_addr).await {
             Ok(stream) => {
                 stream.get_ref().set_nodelay(true)?;
+                set_tcp_user_timeout(stream.get_ref(), options.user_timeout)?;
                 return Ok(stream);
             }
             Err(e) => last_err = Some(e),
@@ -295,5 +393,68 @@ pub async fn connect_uds<P: AsRef<Path>, Ws: WithSocket>(
             "Unix domain sockets are not supported on this platform",
         )
         .into())
+    }
+}
+
+#[cfg(all(
+    test,
+    target_os = "linux",
+    any(feature = "_rt-tokio", feature = "_rt-async-io")
+))]
+mod tests {
+    use super::*;
+    use std::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn user_timeout_reaches_the_socket_and_none_leaves_the_default() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let socket = socket2::SockRef::from(&stream);
+        let default = socket.tcp_user_timeout().unwrap();
+
+        set_tcp_user_timeout(&stream, None).unwrap();
+        assert_eq!(socket.tcp_user_timeout().unwrap(), default);
+
+        set_tcp_user_timeout(&stream, Some(Duration::from_secs(60))).unwrap();
+        assert_eq!(
+            socket.tcp_user_timeout().unwrap(),
+            Some(Duration::from_secs(60))
+        );
+
+        set_tcp_user_timeout(&stream, Some(Duration::from_micros(500))).unwrap();
+        assert_eq!(
+            socket.tcp_user_timeout().unwrap(),
+            Some(Duration::from_millis(1)),
+            "a sub-millisecond timeout must not truncate to the system default"
+        );
+    }
+
+    #[cfg(feature = "_rt-tokio")]
+    #[test]
+    fn connect_tcp_with_applies_the_user_timeout() {
+        struct UserTimeout;
+
+        impl WithSocket for UserTimeout {
+            type Output = Option<Duration>;
+
+            async fn with_socket<S: Socket>(self, socket: S) -> Self::Output {
+                let stream = (&socket as &dyn std::any::Any)
+                    .downcast_ref::<tokio::net::TcpStream>()
+                    .expect("the tokio path hands over a tokio TcpStream");
+                socket2::SockRef::from(stream).tcp_user_timeout().unwrap()
+            }
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let options = TcpConnectOptions::new().with_user_timeout(Duration::from_secs(45));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let applied = runtime
+            .block_on(connect_tcp_with("127.0.0.1", port, UserTimeout, &options))
+            .unwrap();
+        assert_eq!(applied, Some(Duration::from_secs(45)));
     }
 }

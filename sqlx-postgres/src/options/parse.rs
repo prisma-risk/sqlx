@@ -4,6 +4,7 @@ use sqlx_core::percent_encoding::{percent_decode_str, utf8_percent_encode, NON_A
 use sqlx_core::Url;
 use std::net::IpAddr;
 use std::str::FromStr;
+use std::time::Duration;
 
 impl PgConnectOptions {
     pub(crate) fn parse_from_url(url: &Url) -> Result<Self, Error> {
@@ -89,6 +90,13 @@ impl PgConnectOptions {
 
                 "application_name" => options = options.application_name(&value),
 
+                // Milliseconds, as in libpq, where `0` keeps the system default.
+                "tcp_user_timeout" => {
+                    let millis: u64 = value.parse().map_err(Error::config)?;
+                    options = options
+                        .tcp_user_timeout((millis > 0).then_some(Duration::from_millis(millis)));
+                }
+
                 "options" => {
                     if let Some(options) = options.options.as_mut() {
                         options.push(' ');
@@ -159,6 +167,13 @@ impl PgConnectOptions {
         if let Some(ssl_client_key) = &self.ssl_options.ssl_client_key {
             url.query_pairs_mut()
                 .append_pair("sslkey", &ssl_client_key.to_string());
+        }
+
+        if let Some(timeout) = self.tcp_user_timeout.filter(|timeout| !timeout.is_zero()) {
+            // Whole milliseconds, rounding a shorter timeout up as the socket option does.
+            let millis = std::cmp::max(timeout.as_millis(), 1);
+            url.query_pairs_mut()
+                .append_pair("tcp_user_timeout", &millis.to_string());
         }
 
         url.query_pairs_mut().append_pair(
@@ -339,4 +354,25 @@ fn built_url_can_be_parsed() {
     let parsed = PgConnectOptions::from_str(opts.build_url().as_ref());
 
     assert!(parsed.is_ok());
+}
+
+#[test]
+fn it_parses_tcp_user_timeout_in_milliseconds() {
+    let opts = PgConnectOptions::from_str("postgres:///?tcp_user_timeout=60000").unwrap();
+    assert_eq!(Some(Duration::from_secs(60)), opts.tcp_user_timeout);
+
+    let url = opts.build_url();
+    assert!(url
+        .query_pairs()
+        .any(|(key, value)| key == "tcp_user_timeout" && value == "60000"));
+
+    // As in libpq, zero keeps the system default.
+    let opts = PgConnectOptions::from_str("postgres:///?tcp_user_timeout=0").unwrap();
+    assert_eq!(None, opts.tcp_user_timeout);
+    assert!(!opts
+        .build_url()
+        .query_pairs()
+        .any(|(key, _)| key == "tcp_user_timeout"));
+
+    assert!(PgConnectOptions::from_str("postgres:///?tcp_user_timeout=soon").is_err());
 }

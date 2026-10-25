@@ -3,6 +3,7 @@ use std::env::var;
 use std::fmt::{self, Display, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use sqlx_core::net::tls::TlsConnector;
 pub use ssl_mode::PgSslMode;
@@ -29,6 +30,7 @@ pub struct PgConnectOptions {
     pub(crate) log_settings: LogSettings,
     pub(crate) extra_float_digits: Option<Cow<'static, str>>,
     pub(crate) options: Option<String>,
+    pub(crate) tcp_user_timeout: Option<Duration>,
 }
 
 impl Default for PgConnectOptions {
@@ -108,6 +110,7 @@ impl PgConnectOptions {
             extra_float_digits: Some("2".into()),
             log_settings: Default::default(),
             options: var("PGOPTIONS").ok(),
+            tcp_user_timeout: None,
         }
     }
 
@@ -389,6 +392,28 @@ impl PgConnectOptions {
         self
     }
 
+    /// Sets `TCP_USER_TIMEOUT` on the server connection, or keeps the operating system default
+    /// with `None`.
+    ///
+    /// The kernel drops the connection once sent data has gone unacknowledged for `timeout`.
+    /// Without it, Linux retransmits for about 15 minutes before it fails a connection whose
+    /// server stopped answering without a FIN or RST, such as one lost in a failover. This mirrors
+    /// libpq's `tcp_user_timeout`. A zero duration also keeps the default, and the kernel counts
+    /// whole milliseconds, so a shorter non-zero `timeout` becomes one. Only Linux, Android,
+    /// Fuchsia and Cygwin have the option; elsewhere, and on Unix-domain sockets, it is ignored.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use std::time::Duration;
+    /// # use sqlx_postgres::PgConnectOptions;
+    /// let options = PgConnectOptions::new().tcp_user_timeout(Duration::from_secs(60));
+    /// ```
+    pub fn tcp_user_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
+        self.tcp_user_timeout = timeout.into();
+        self
+    }
+
     /// Sets or removes the `extra_float_digits` connection option.
     ///
     /// This changes the default precision of floating-point values returned in text mode (when
@@ -600,6 +625,20 @@ impl PgConnectOptions {
     /// ```
     pub fn get_options(&self) -> Option<&str> {
         self.options.as_deref()
+    }
+
+    /// Get the `TCP_USER_TIMEOUT`, if set.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use std::time::Duration;
+    /// # use sqlx_postgres::PgConnectOptions;
+    /// let options = PgConnectOptions::new().tcp_user_timeout(Duration::from_secs(60));
+    /// assert_eq!(options.get_tcp_user_timeout(), Some(Duration::from_secs(60)));
+    /// ```
+    pub fn get_tcp_user_timeout(&self) -> Option<Duration> {
+        self.tcp_user_timeout
     }
 }
 

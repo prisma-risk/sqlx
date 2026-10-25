@@ -38,6 +38,7 @@ if a parameter is not passed in via URL, it is populated by reading
 | `sslkey`           | `PGSSLKEY`           | Unset. See [Note: SSL](#note-ssl).                          |
 | `options`          | `PGOPTIONS`          | Unset.                                                      |
 | `application_name` | `PGAPPNAME`          | Unset.                                                      |
+| `tcp_user_timeout` |                      | Unset. Milliseconds; `0` is the system default.             |
 
 [`passfile`] handling may be bypassed using [`PgConnectOptions::new_without_pgpass()`].
 
