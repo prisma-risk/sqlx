@@ -3,6 +3,7 @@ name = "sqlx-sqlite"
 documentation = "https://docs.rs/sqlx"
 description = "SQLite driver implementation for SQLx. Not for direct use; see the `sqlx` crate for details."
 version.workspace = true
+publish = ["prismarisk"]
 license.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -98,6 +99,7 @@ workspace = true
 # FIXME: https://github.com/rust-lang/cargo/issues/15622
 # workspace = true
 path = ".."
+registry = "prismarisk"
 default-features = false
 features = ["macros", "runtime-tokio", "tls-none", "sqlite"]
 

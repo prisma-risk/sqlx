@@ -2,6 +2,7 @@
 name = "sqlx-core"
 description = "Core of SQLx, the rust SQL toolkit. Not intended to be used directly."
 version.workspace = true
+publish = ["prismarisk"]
 license.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -113,6 +114,7 @@ tokio = { version = "1.25.0", features = ["rt"] }
 # FIXME: https://github.com/rust-lang/cargo/issues/15622
 # workspace = true
 path = ".."
+registry = "prismarisk"
 default-features = false
 features = ["postgres", "sqlite", "mysql", "migrate", "macros", "time", "uuid"]
 

@@ -3,6 +3,7 @@ name = "sqlx-mysql"
 documentation = "https://docs.rs/sqlx"
 description = "MySQL driver implementation for SQLx. Not for direct use; see the `sqlx` crate for details."
 version.workspace = true
+publish = ["prismarisk"]
 license.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -63,7 +64,7 @@ serde = { version = "1.0.219", optional = true }
 
 [dev-dependencies]
 # FIXME: https://github.com/rust-lang/cargo/issues/15622
-sqlx = { path = "..", default-features = false, features = ["mysql"] }
+sqlx = { path = "..", registry = "prismarisk", default-features = false, features = ["mysql"] }
 
 [lints]
 workspace = true

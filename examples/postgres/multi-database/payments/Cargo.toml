@@ -1,6 +1,7 @@
 [package]
 name = "sqlx-example-postgres-multi-database-payments"
-version = "0.1.0"
+version = "0.0.0-dev"
+publish = false
 edition = "2021"
 
 [dependencies]
@@ -14,6 +15,7 @@ uuid = "1.12.1"
 
 [dependencies.accounts]
 path = "../accounts"
+registry = "prismarisk"
 package = "sqlx-example-postgres-multi-database-accounts"
 
 [dev-dependencies]

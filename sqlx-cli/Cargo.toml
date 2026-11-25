@@ -1,6 +1,7 @@
 [package]
 name = "sqlx-cli"
 version.workspace = true
+publish = false
 description = "Command-line utility for SQLx, the Rust SQL toolkit."
 edition = "2021"
 readme = "README.md"

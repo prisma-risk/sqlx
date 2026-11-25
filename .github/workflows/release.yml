@@ -1,0 +1,74 @@
+name: Release exact source
+run-name: Release ${{ inputs.source_sha }} for ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full main commit selected for release.
+        required: true
+        type: string
+      request_id:
+        description: Stable release request ID used to correlate retries.
+        required: true
+        type: string
+      origin:
+        description: Release initiator.
+        required: false
+        default: platform
+        type: choice
+        options:
+          - platform
+      requested_version:
+        description: Exact stable version selected and reviewed in Platform.
+        required: true
+        type: string
+      release_notes:
+        description: Reviewed GitHub Release notes from Platform.
+        required: true
+        type: string
+      skip_release_validation:
+        description: Emergency Platform request skips exact release commit CI and image validation before publication.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exact-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: ${{ github.ref == 'refs/heads/main' && (github.actor == 'prisma-risk-platform[bot]' || github.actor == 'prisma-risk-platform-dev[bot]') }}
+    permissions:
+      actions: write
+      checks: read
+      contents: write
+      pull-requests: write
+      statuses: read
+    uses: prisma-risk/rust-workflows/.github/workflows/exact-release.yml@4c0e89e3e779cf0ce61266b7b7762f02ebe66e6b
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      request_id: ${{ inputs.request_id }}
+      status_reporting: false
+      skip_release_validation: ${{ inputs.origin == 'platform' && inputs.skip_release_validation }}
+      package_name: sqlx
+      release_strategy: platform-workspace
+      requested_version: ${{ inputs.requested_version }}
+      release_notes: ${{ inputs.release_notes }}
+      platform_prepare_script: scripts/prepare-platform-release.sh
+      metadata_files_json: '["Cargo.lock","Cargo.toml"]'
+      release_tag_prefix: prismarisk-v
+      ci_workflow: prismarisk.yml
+      image_workflow: ""
+      artifact_recovery_workflow: recover.yml
+      artifact_publication_before_recovery: false
+      artifact_verification_after_publish: false
+      private_registry: true
+    secrets:
+      RELEASE_PLZ_APP_ID: ${{ secrets.RELEASE_PLZ_APP_ID }}
+      RELEASE_PLZ_APP_PRIVATE_KEY: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+      CARGO_REGISTRIES_PRISMARISK_TOKEN: ${{ secrets.CARGO_REGISTRIES_PRISMARISK_TOKEN }}

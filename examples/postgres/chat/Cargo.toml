@@ -1,11 +1,12 @@
 [package]
 name = "sqlx-example-postgres-chat"
-version = "0.1.0"
+version = "0.0.0-dev"
+publish = false
 edition = "2021"
 workspace = "../../../"
 
 [dependencies]
-sqlx = { path = "../../../", features = [ "postgres", "runtime-tokio", "tls-native-tls" ] }
+sqlx = { path = "../../../", registry = "prismarisk", features = [ "postgres", "runtime-tokio", "tls-native-tls" ] }
 tokio = { version = "1.25.0", features = [ "rt-multi-thread", "macros" ] }
 ratatui = "0.30.0"
 crossterm = "0.29.0"

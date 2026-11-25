@@ -1,6 +1,7 @@
 [package]
 name = "sqlx-example-postgres-multi-tenant"
 version.workspace = true
+publish = false
 license.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -26,10 +27,12 @@ features = ["runtime-tokio", "postgres", "migrate", "sqlx-toml"]
 
 [dependencies.accounts]
 path = "accounts"
+registry = "prismarisk"
 package = "sqlx-example-postgres-multi-tenant-accounts"
 
 [dependencies.payments]
 path = "payments"
+registry = "prismarisk"
 package = "sqlx-example-postgres-multi-tenant-payments"
 
 [lints]

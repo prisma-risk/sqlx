@@ -1,0 +1,3 @@
+[registries.prismarisk]
+index = "sparse+https://kellnr.prismarisk.dev/api/v1/crates/"
+credential-provider = "cargo:token"

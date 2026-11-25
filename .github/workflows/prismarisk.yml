@@ -1,0 +1,31 @@
+name: Check PrismaRisk workspace
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Check crate versions and registry
+        run: python3 scripts/check-prismarisk-workspace.py
+
+      - name: Cache locked dependencies
+        run: cargo fetch --locked
+
+      - name: Package the SQLx crates
+        run: |
+          cargo package --workspace --locked --no-verify --offline --registry prismarisk \
+            --exclude sqlx-cli --exclude sqlx-test --exclude 'sqlx-example-*'

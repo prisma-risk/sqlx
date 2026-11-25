@@ -1,0 +1,62 @@
+name: Verify published SQLx crates
+run-name: Recover prismarisk-v${{ inputs.version }} for ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact version of the published crates.
+        required: true
+        type: string
+      request_id:
+        description: Platform release request ID.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    if: inputs.request_id != '' && github.ref == 'refs/heads/main'
+    runs-on: prisma-risk-arm64
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - name: Validate recovery request
+        env:
+          VERSION: ${{ inputs.version }}
+          REQUEST_ID: ${{ inputs.request_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo '::error::Invalid release version'
+            exit 1
+          fi
+          if [[ ! "$REQUEST_ID" =~ ^[A-Za-z0-9._-]{1,160}$ ]]; then
+            echo '::error::Invalid release request ID'
+            exit 1
+          fi
+
+      - name: Check out registry configuration
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Check published crates
+        env:
+          VERSION: ${{ inputs.version }}
+          CARGO_REGISTRIES_PRISMARISK_TOKEN: ${{ secrets.CARGO_REGISTRIES_PRISMARISK_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CARGO_REGISTRIES_PRISMARISK_TOKEN" ]]; then
+            echo '::error::CARGO_REGISTRIES_PRISMARISK_TOKEN is required'
+            exit 1
+          fi
+          export CARGO_HOME="$(mktemp -d "$RUNNER_TEMP/sqlx-recover.XXXXXX")"
+          trap 'rm -rf "$CARGO_HOME"' EXIT
+          cd "$RUNNER_TEMP"
+          for crate in sqlx sqlx-core sqlx-macros sqlx-macros-core sqlx-mysql sqlx-postgres sqlx-sqlite; do
+            cargo --config "$GITHUB_WORKSPACE/.cargo/config.toml" \
+              info "$crate@$VERSION" --registry prismarisk
+          done

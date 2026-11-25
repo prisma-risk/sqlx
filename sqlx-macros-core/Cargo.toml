@@ -2,6 +2,7 @@
 name = "sqlx-macros-core"
 description = "Macro support core for SQLx, the Rust SQL toolkit. Not intended to be used directly."
 version.workspace = true
+publish = ["prismarisk"]
 license.workspace = true
 edition.workspace = true
 authors.workspace = true

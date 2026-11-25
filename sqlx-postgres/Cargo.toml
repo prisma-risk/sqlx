@@ -3,6 +3,7 @@ name = "sqlx-postgres"
 documentation = "https://docs.rs/sqlx"
 description = "PostgreSQL driver implementation for SQLx. Not for direct use; see the `sqlx` crate for details."
 version.workspace = true
+publish = ["prismarisk"]
 license.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -79,6 +80,7 @@ workspace = true
 # FIXME: https://github.com/rust-lang/cargo/issues/15622
 # workspace = true
 path = ".."
+registry = "prismarisk"
 features = ["postgres", "derive"]
 
 [target.'cfg(target_os = "windows")'.dependencies]
