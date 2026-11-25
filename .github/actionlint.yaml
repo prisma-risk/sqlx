@@ -1,0 +1,10 @@
+---
+self-hosted-runner:
+  labels:
+    - prisma-risk-arm64
+
+paths:
+  .github/workflows/examples.yml:
+    ignore:
+      # The SQLite example job has no `offline` matrix.
+      - '^property "offline" is not defined in object type \{\}$'

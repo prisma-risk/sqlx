@@ -1,3 +1,5 @@
+//! Query metadata generation and checks for the prepare command.
+
 use std::collections::{BTreeSet, HashSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -252,6 +254,8 @@ fn setup_minimal_project_recompile(
     Ok(())
 }
 
+// Keep the filetime API to preserve timestamp updates across supported targets.
+#[allow(deprecated)]
 fn minimal_project_clean(
     cargo: impl AsRef<OsStr>,
     action: ProjectRecompileAction,

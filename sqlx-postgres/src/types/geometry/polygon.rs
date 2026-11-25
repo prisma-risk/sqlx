@@ -1,3 +1,5 @@
+//! PostgreSQL polygon values and their text and binary codecs.
+
 use crate::decode::Decode;
 use crate::encode::{Encode, IsNull};
 use crate::error::BoxDynError;
@@ -83,20 +85,19 @@ impl FromStr for PgPolygon {
 
         let mut points = vec![];
 
-        if parts.len() % 2 != 0 {
+        let (pairs, remainder) = parts.as_chunks::<2>();
+        if !remainder.is_empty() {
             return Err(Error::Decode(
                 format!("Unmatched pair in POLYGON: {}", s).into(),
             ));
         }
 
-        for chunk in parts.chunks_exact(2) {
-            if let [x_str, y_str] = chunk {
-                let x = parse_float_from_str(x_str, "could not get x")?;
-                let y = parse_float_from_str(y_str, "could not get y")?;
+        for [x_str, y_str] in pairs {
+            let x = parse_float_from_str(x_str, "could not get x")?;
+            let y = parse_float_from_str(y_str, "could not get y")?;
 
-                let point = PgPoint { x, y };
-                points.push(point);
-            }
+            let point = PgPoint { x, y };
+            points.push(point);
         }
 
         if !points.is_empty() {

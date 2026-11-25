@@ -1,3 +1,5 @@
+//! PostgreSQL protocol I/O and identifiers for statements and portals.
+
 mod buf_mut;
 
 pub use buf_mut::PgBufMutExt;
@@ -120,7 +122,7 @@ impl IdInner {
             len += name_prefix.len();
             // estimate the length of the ID in decimal
             // `.ilog10()` can't panic since the value is never zero
-            len += id.get().ilog10() as usize;
+            len += id.ilog10() as usize;
             // add one to compensate for `ilog10()` rounding down.
             len += 1;
         }

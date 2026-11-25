@@ -1,3 +1,5 @@
+//! Query output types and row conversion code for the query macros.
+
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{quote, ToTokens, TokenStreamExt};
 use syn::Type;
@@ -274,7 +276,7 @@ fn get_column_type<DB: DatabaseExt>(
             if let Some(feature_gate) = <DB as TypeChecking>::get_feature_gate(type_info) {
                 format!(
                     "SQLx feature `{feat}` required for type {ty} of {col}",
-                    ty = &type_info,
+                    ty = type_info,
                     feat = feature_gate,
                     col = DisplayColumn {
                         idx: i,
@@ -304,7 +306,7 @@ fn get_column_type<DB: DatabaseExt>(
             format!(
                 "SQLx feature `{feat}` required for type {ty} of {col} \
                  (configured by `macros.preferred-crates.date-time` in sqlx.toml)",
-                ty = &type_info,
+                ty = type_info,
                 feat = feature_gate,
                 col = DisplayColumn {
                     idx: i,
@@ -323,7 +325,7 @@ fn get_column_type<DB: DatabaseExt>(
             format!(
                 "SQLx feature `{feat}` required for type {ty} of {col} \
                  (configured by `macros.preferred-crates.numeric` in sqlx.toml)",
-                ty = &type_info,
+                ty = type_info,
                 feat = feature_gate,
                 col = DisplayColumn {
                     idx: i,

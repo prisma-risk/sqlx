@@ -1,3 +1,5 @@
+//! SQLite codecs for date and time values from the `time` crate.
+
 use crate::arguments::SqliteArgumentsBuffer;
 use crate::value::ValueRef;
 use crate::{
@@ -192,6 +194,8 @@ fn decode_datetime_from_text(value: &str) -> Option<PrimitiveDateTime> {
     None
 }
 
+// These format items keep compatibility with the minimum supported `time` version.
+#[allow(deprecated)]
 mod formats {
     use time::format_description::BorrowedFormatItem::{Component, Literal, Optional};
     use time::format_description::{modifier, BorrowedFormatItem, Component::*};

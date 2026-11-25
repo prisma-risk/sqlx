@@ -19,11 +19,17 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup Rust
+        run: rustup show active-toolchain || rustup toolchain install
+
       - name: Check crate versions and registry
         run: python3 scripts/check-prismarisk-workspace.py
 
       - name: Cache locked dependencies
         run: cargo fetch --locked
+
+      - name: Check the PostgreSQL build
+        run: cargo check -p sqlx --features postgres,runtime-tokio,macros --locked
 
       - name: Package the SQLx crates
         run: |

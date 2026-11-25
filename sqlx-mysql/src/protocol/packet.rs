@@ -1,3 +1,5 @@
+//! MySQL packet headers and payload codecs.
+
 use std::cmp::min;
 use std::ops::{Deref, DerefMut};
 
@@ -47,9 +49,9 @@ where
         // add more packets if we need to split the data
         if len >= 0xFF_FF_FF {
             let rest = buf.split_off(offset + 4 + 0xFF_FF_FF);
-            let mut chunks = rest.chunks_exact(0xFF_FF_FF);
+            let (chunks, remainder) = rest.as_chunks::<0xFF_FF_FF>();
 
-            for chunk in chunks.by_ref() {
+            for chunk in chunks {
                 buf.reserve(chunk.len() + 4);
 
                 // `chunk.len() == 0xFF_FF_FF`
@@ -59,7 +61,6 @@ where
             }
 
             // this will also handle adding a zero sized packet if the data size is a multiple of 0xFF_FF_FF
-            let remainder = chunks.remainder();
             buf.reserve(remainder.len() + 4);
 
             // `remainder.len() < 0xFF_FF_FF`

@@ -1,3 +1,5 @@
+//! Connection pool state, permits, and maintenance tasks.
+
 use super::connection::{Floating, Idle, Live};
 use crate::connection::ConnectOptions;
 use crate::connection::Connection;
@@ -220,6 +222,8 @@ impl<DB: Database> PoolInner<DB> {
     /// Try to atomically increment the pool size for a new connection.
     ///
     /// Returns `Err` if the pool is at max capacity already or is closed.
+    // The replacement `try_update` can require Rust later than MSRV 1.94.
+    #[allow(deprecated)]
     pub(super) fn try_increment_size<'a>(
         self: &'a Arc<Self>,
         permit: AsyncSemaphoreReleaser<'a>,
